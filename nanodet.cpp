@@ -25,7 +25,7 @@ static const int INPUT_H = 416;
 static const int INPUT_W = 416;
 static const int REG_MAX = 7;
 static const int CLASS_NUM = 80;
-static const int OUTPUT_SIZE = 1000 * 7;//tmp
+static const int OUTPUT_SIZE = 1000 *  (CLASS_NUM + 4 * (REG_MAX + 1));//tmp
 
 const char* INPUT_BLOB_NAME = "data";
 const char* OUTPUT_BLOB_NAME = "prob";
@@ -282,6 +282,7 @@ ILayer* ConvModule(INetworkDefinition *network, std::map<std::string, Weights>& 
     return relu;
 }
 
+
 ILayer* invertedRes(INetworkDefinition *network, std::map<std::string, Weights>& weightMap, ITensor& input, std::string lname, int inch, int outch, int s) {
     Weights emptywts{DataType::kFLOAT, nullptr, 0};
     int branch_features = outch / 2;
@@ -291,10 +292,11 @@ ILayer* invertedRes(INetworkDefinition *network, std::map<std::string, Weights>&
         assert(conv1);
         conv1->setStrideNd(DimsHW{s, s});
         conv1->setPaddingNd(DimsHW{1, 1});
-        conv1->setNbGroups(inch);
+        conv1->setNbGroups(inch);        
         IScaleLayer *bn1 = addBatchNorm2d(network, weightMap, *conv1->getOutput(0), lname + "branch1.1", 1e-5);
         IConvolutionLayer* conv2 = network->addConvolutionNd(*bn1->getOutput(0), branch_features, DimsHW{1, 1}, weightMap[lname + "branch1.2.weight"], emptywts);
         assert(conv2);
+        conv2->setStrideNd(DimsHW{1, 1});
         IScaleLayer *bn2 = addBatchNorm2d(network, weightMap, *conv2->getOutput(0), lname + "branch1.3", 1e-5);
         IActivationLayer* relu1 = network->addActivation(*bn2->getOutput(0), ActivationType::kLEAKY_RELU);
         assert(relu1);
@@ -310,6 +312,7 @@ ILayer* invertedRes(INetworkDefinition *network, std::map<std::string, Weights>&
 
     IConvolutionLayer* conv3 = network->addConvolutionNd(*x2i, branch_features, DimsHW{1, 1}, weightMap[lname + "branch2.0.weight"], emptywts);
     assert(conv3);
+    conv3->setStrideNd(DimsHW{1, 1});
     IScaleLayer *bn3 = addBatchNorm2d(network, weightMap, *conv3->getOutput(0), lname + "branch2.1", 1e-5);
     IActivationLayer* relu2 = network->addActivation(*bn3->getOutput(0), ActivationType::kLEAKY_RELU);
     assert(relu2);
@@ -321,6 +324,7 @@ ILayer* invertedRes(INetworkDefinition *network, std::map<std::string, Weights>&
     IScaleLayer *bn4 = addBatchNorm2d(network, weightMap, *conv4->getOutput(0), lname + "branch2.4", 1e-5);
     IConvolutionLayer* conv5 = network->addConvolutionNd(*bn4->getOutput(0), branch_features, DimsHW{1, 1}, weightMap[lname + "branch2.5.weight"], emptywts);
     assert(conv5);
+    conv5->setStrideNd(DimsHW{1, 1});
     IScaleLayer *bn5 = addBatchNorm2d(network, weightMap, *conv5->getOutput(0), lname + "branch2.6", 1e-5);
     IActivationLayer* relu3 = network->addActivation(*bn5->getOutput(0), ActivationType::kLEAKY_RELU);
     assert(relu3);
@@ -336,7 +340,7 @@ ILayer* invertedRes(INetworkDefinition *network, std::map<std::string, Weights>&
     sf1->setSecondTranspose(Permutation{1, 0, 2, 3});
 
     Dims dims1 = sf1->getOutput(0)->getDimensions();
-    IShuffleLayer *sf2 = network->addShuffle(*sf1->getOutput(0));
+    IShuffleLayer* sf2 = network->addShuffle(*sf1->getOutput(0));
     assert(sf2);
     sf2->setReshapeDimensions(Dims3(dims.d[0], dims.d[1], dims.d[2]));
     return sf2;
@@ -354,7 +358,6 @@ ICudaEngine* createEngine(unsigned int maxBatchSize, IBuilder* builder, IBuilder
     std::map<std::string, Weights> weightMap = loadWeights("../nanodet-plus-m_416.wts");
     Weights emptywts{DataType::kFLOAT, nullptr, 0};
 
-
     IConvolutionLayer* conv1 = network->addConvolutionNd(*data, 24, DimsHW{3, 3}, weightMap["backbone.conv1.0.weight"], emptywts);
     assert(conv1);
     conv1->setStrideNd(DimsHW{2, 2});
@@ -367,22 +370,25 @@ ICudaEngine* createEngine(unsigned int maxBatchSize, IBuilder* builder, IBuilder
     pool1->setStrideNd(DimsHW{2, 2});
     pool1->setPaddingNd(DimsHW{1, 1});
 
-
-    ILayer* inputs1 = invertedRes(network, weightMap, *pool1->getOutput(0), "backbone.stage2.0.", 24, 116, 2);
-    inputs1 = invertedRes(network, weightMap, *inputs1->getOutput(0), "backbone.stage2.2.", 116, 116, 1);
-    inputs1 = invertedRes(network, weightMap, *inputs1->getOutput(0), "backbone.stage2.3.", 116, 116, 1);
-    ILayer* inputs2 = invertedRes(network, weightMap, *inputs1->getOutput(0), "backbone.stage3.0.", 116, 232, 2);
-    inputs2 = invertedRes(network, weightMap, *inputs2->getOutput(0), "backbone.stage3.1.", 232, 232, 1);
-    inputs2 = invertedRes(network, weightMap, *inputs2->getOutput(0), "backbone.stage3.2.", 232, 232, 1);
-    inputs2 = invertedRes(network, weightMap, *inputs2->getOutput(0), "backbone.stage3.3.", 232, 232, 1);
-    inputs2 = invertedRes(network, weightMap, *inputs2->getOutput(0), "backbone.stage3.4.", 232, 232, 1);
-    inputs2 = invertedRes(network, weightMap, *inputs2->getOutput(0), "backbone.stage3.5.", 232, 232, 1);
-    inputs2 = invertedRes(network, weightMap, *inputs2->getOutput(0), "backbone.stage3.6.", 232, 232, 1);
-    inputs2 = invertedRes(network, weightMap, *inputs2->getOutput(0), "backbone.stage3.7.", 232, 232, 1);
-    ILayer* inputs3 = invertedRes(network, weightMap, *inputs2->getOutput(0), "backbone.stage4.0.", 232, 464, 2);
-    inputs3 = invertedRes(network, weightMap, *inputs3->getOutput(0), "backbone.stage4.1.", 464, 464, 1);
-    inputs3 = invertedRes(network, weightMap, *inputs3->getOutput(0), "backbone.stage4.2.", 464, 464, 1);
-    inputs3 = invertedRes(network, weightMap, *inputs3->getOutput(0), "backbone.stage4.3.", 464, 464, 1);
+    ILayer* ir1 = invertedRes(network, weightMap, *pool1->getOutput(0), "backbone.stage2.0.", 24, 116, 2);
+    ir1 = invertedRes(network, weightMap, *ir1->getOutput(0), "backbone.stage2.1.", 116, 116, 1);
+    ir1 = invertedRes(network, weightMap, *ir1->getOutput(0), "backbone.stage2.2.", 116, 116, 1);
+    ir1 = invertedRes(network, weightMap, *ir1->getOutput(0), "backbone.stage2.3.", 116, 116, 1);
+    ILayer* inputs1 = ir1;
+    ir1 = invertedRes(network, weightMap, *ir1->getOutput(0), "backbone.stage3.0.", 116, 232, 2);
+    ir1 = invertedRes(network, weightMap, *ir1->getOutput(0), "backbone.stage3.1.", 232, 232, 1);
+    ir1 = invertedRes(network, weightMap, *ir1->getOutput(0), "backbone.stage3.2.", 232, 232, 1);
+    ir1 = invertedRes(network, weightMap, *ir1->getOutput(0), "backbone.stage3.3.", 232, 232, 1);
+    ir1 = invertedRes(network, weightMap, *ir1->getOutput(0), "backbone.stage3.4.", 232, 232, 1);
+    ir1 = invertedRes(network, weightMap, *ir1->getOutput(0), "backbone.stage3.5.", 232, 232, 1);
+    ir1 = invertedRes(network, weightMap, *ir1->getOutput(0), "backbone.stage3.6.", 232, 232, 1);
+    ir1 = invertedRes(network, weightMap, *ir1->getOutput(0), "backbone.stage3.7.", 232, 232, 1);
+    ILayer* inputs2 = ir1;
+    ir1 = invertedRes(network, weightMap, *ir1->getOutput(0), "backbone.stage4.0.", 232, 464, 2);
+    ir1 = invertedRes(network, weightMap, *ir1->getOutput(0), "backbone.stage4.1.", 464, 464, 1);
+    ir1 = invertedRes(network, weightMap, *ir1->getOutput(0), "backbone.stage4.2.", 464, 464, 1);
+    ir1 = invertedRes(network, weightMap, *ir1->getOutput(0), "backbone.stage4.3.", 464, 464, 1);
+    ILayer* inputs3 = ir1;
 
     ILayer* reduce1 = ConvModule(network, weightMap,*inputs1->getOutput(0), "fpn.reduce_layers.0.", 116, 96,1, 1, 0);   
     ILayer* reduce2 = ConvModule(network, weightMap,*inputs2->getOutput(0), "fpn.reduce_layers.1.", 232, 96,1, 1, 0);
@@ -549,10 +555,9 @@ int main(int argc, char** argv)
 
     // Print histogram of the output distribution
     std::cout << "\nOutput:\n\n";
-    for (unsigned int i = 0; i < OUTPUT_SIZE; i++)
+    for (unsigned int i = 0; i < 10; i++)
     {
         std::cout << prob[i] << ", ";
-        if (i % 10 == 0) std::cout << i / 10 << std::endl;
     }
     std::cout << std::endl;
 
